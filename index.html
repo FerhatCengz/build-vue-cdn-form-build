@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Form Oluşturucu ve Önizleme</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <!-- Bootstrap 5 CSS -->
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.6.4.min.js"></script>
+
+    <!-- jQuery UI -->
+    <link
+      rel="stylesheet"
+      href="https://code.jquery.com/ui/1.13.2/themes/base/jquery-ui.css"
+    />
+    <script src="https://code.jquery.com/ui/1.13.2/jquery-ui.min.js"></script>
+
+    <!-- FormBuilder & FormRender -->
+    <link
+      rel="stylesheet"
+      href="https://formbuilder.online/assets/css/form-builder.min.css"
+    />
+    <script src="https://formbuilder.online/assets/js/form-builder.min.js"></script>
+    <script src="https://formbuilder.online/assets/js/form-render.min.js"></script>
+
+    <!-- Vue.js -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+
+
+    <style>
+      body {
+        background: #f8f9fa;
+      }
+      #fb-editor {
+        min-height: 500px;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        background: #fff;
+        padding: 10px;
+      }
+      .preview-box {
+        background: #fff;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 20px;
+        min-height: 500px;
+      }
+      textarea {
+        width: 100%;
+        height: 200px;
+        font-family: monospace;
+        font-size: 14px;
+      }
+
+      /* -----------------------------------------------------------
+         HR kullanıcıları için gelişmiş düzenleme alanlarını gizle
+         - class/className
+         - name/field_name
+         - access/limit_access
+         - other/enableOther (Diğerini Etkinleştir)
+         - toggle/switch (Geçiş yapısı)
+         UI tarafında gizlemek tek başına yeterli değil; JS ile sanitize da yapıyoruz.
+      ----------------------------------------------------------- */
+      .fb-editor .form-group input[name="className"],
+      .fb-editor .form-group input[name="class"],
+      .fb-editor .form-group select[name="className"],
+      .fb-editor .form-group select[name="class"],
+      .fb-editor .form-group input[name="name"],
+      .fb-editor .form-group input[name="field_name"],
+      .fb-editor .form-group input[name="access"],
+      .fb-editor .form-group select[name="access"],
+      .fb-editor .form-group input[name="access[]"],
+      .fb-editor .form-group input[name="limit_access"],
+      .fb-editor .form-group input[name="other"],
+      .fb-editor .form-group input[name="enableOther"],
+      .fb-editor .form-group input[type="checkbox"][name*="other"],
+      .fb-editor .form-group input[name="toggle"],
+      .fb-editor .form-group input[name="switch"],
+      .fb-editor .form-group input[type="checkbox"][name*="toggle"],
+      .fb-editor .form-group input[type="checkbox"][name*="switch"],
+      .fb-editor .form-group label[for="className"],
+      .fb-editor .form-group label[for="class"],
+      .fb-editor .form-group label[for="name"],
+      .fb-editor .form-group label[for="field_name"],
+      .fb-editor .form-group label[for="access"],
+      .fb-editor .form-group label[for="limit_access"],
+      .fb-editor .form-group label[for="other"],
+      .fb-editor .form-group label[for="enableOther"],
+      .fb-editor .form-group label[for="toggle"],
+      .fb-editor .form-group label[for="switch"],
+      .save-template,
+      .get-data
+      {
+        display: none !important;
+      }
+
+   
+
+      /* Otomatik değer bilgisi için stil */
+      .auto-value-info {
+        font-size: 0.75rem;
+        font-style: italic;
+        color: #6c757d;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container-fluid mt-4">
+      <div class="row" id="app">
+        <!-- Form Builder -->
+        <div class="col-md-4">
+          <h4 class="mb-3">🛠️ Form Oluşturucu</h4>
+          <div id="fb-editor"></div>
+          <!-- Kendi basit araç çubuğumuz (Temizle gibi) buraya enjekte edilecek -->
+          <div id="ys-toolbar" class="mt-2"></div>
+        </div>
+
+        <!-- Form Önizleme -->
+        <div class="col-md-4">
+          <h4 class="mb-3">👀 Form Önizleme</h4>
+          <div class="preview-box">
+            <form id="form-preview"></form>
+          </div>
+        </div>
+
+        <!-- JSON / HTML Çıktısı -->
+        <div class="col-md-4">
+          <h4 class="mb-3">📦 Çıktılar</h4>
+          <label><b>JSON Formatı</b></label>
+          <textarea id="json-output" readonly></textarea>
+
+          <label class="mt-3"><b>HTML Formatı</b></label>
+          <textarea id="html-output" readonly></textarea>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      /* ============================================================
+         Yardımcı Fonksiyonlar (stateless)
+      ============================================================ */
+
+      /**
+       * Güvenli karşılaştırma: JSON.stringify ile derin eşitlik.
+       * @param {any} a
+       * @param {any} b
+       * @returns {boolean}
+       */
+      const deepEqual = (a, b) => {
+        try {
+          return JSON.stringify(a) === JSON.stringify(b);
+        } catch {
+          return false;
+        }
+      };
+
+      /**
+       * Basit debounce helper
+       * @param {Function} fn
+       * @param {number} wait
+       * @returns {Function}
+       */
+      const debounce = (fn, wait = 120) => {
+        let t;
+        return (...args) => {
+          clearTimeout(t);
+          t = setTimeout(() => fn.apply(null, args), wait);
+        };
+      };
+
+      /**
+       * Türkçe karakterleri de dikkate alan slugify
+       * @param {string} s
+       * @returns {string}
+       */
+      const slugify = (s) => {
+        if (!s) return "";
+        const map = {
+          ç: "c",
+          Ç: "c",
+          ğ: "g",
+          Ğ: "g",
+          ş: "s",
+          Ş: "s",
+          ü: "u",
+          Ü: "u",
+          ö: "o",
+          Ö: "o",
+          ı: "i",
+          İ: "i",
+          ñ: "n",
+        };
+        s = s.replace(/./g, (c) => map[c] || c);
+        return s
+          .toString()
+          .toLowerCase()
+          .trim()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/-+/g, "-")
+          .replace(/^-|-$/g, "");
+      };
+
+      /**
+       * formBuilder çıktısını her zaman {obj, str} çiftine normalize eder.
+       * @param {any|string} raw
+       * @returns {{obj:Array, str:string}}
+       */
+      const normalizeSchema = (raw) => {
+        let obj;
+        if (typeof raw === "string") {
+          try {
+            obj = JSON.parse(raw);
+          } catch {
+            obj = [];
+          }
+        } else {
+          obj = Array.isArray(raw) ? raw : [];
+        }
+        let str;
+        try {
+          str = JSON.stringify(obj, null, 2);
+        } catch {
+          str = "[]";
+        }
+        return { obj, str };
+      };
+
+      /* ============================================================
+         UiPolicyService
+         - Editör panelindeki gelişmiş alanları gizler (UI)
+         - Seçenek (option) değerlerini label'dan otomatik slug'lar (UI)
+         - Şemanın (JSON) "güvenli sürümünü" üretir (class/access temizlenmiş)
+      ============================================================ */
+      class UiPolicyService {
+        /**
+         * @param {Object} params
+         * @param {HTMLElement} params.root - gözlenecek kök (genellikle document.body)
+         */
+        constructor({ root = document.body } = {}) {
+          this.root = root;
+          this.observeEditPanel(); // editörde render oldukça kuralları uygula
+        }
+
+        /**
+         * Editör UI'sını izler ve kuralları uygular:
+         * - class/name/access alanlarını sakla
+         * - option value girişini gizle, label değişince value'yu slugla
+         */
+        observeEditPanel() {
+          const applyRules = () => {
+            // 1) Gelişmiş kontrolleri gizle (CSS ile de gizleniyor; JS ile pekiştiriyoruz)
+            const selectors =
+              'input[name="className"], input[name="class"], select[name="className"], select[name="class"], input[name="name"], input[name="field_name"], input[name="access"], input[name="access[]"], select[name="access"], input[name="limit_access"], input[name="other"], input[name="enableOther"], input[type="checkbox"][name*="other"], input[name="toggle"], input[name="switch"], input[type="checkbox"][name*="toggle"], input[type="checkbox"][name*="switch"]';
+            $(selectors).each(function () {
+              $(this).closest(".form-group, .fb-option, .field, .control-group").hide();
+            });
+
+            // 2) Option alanlarını bul ve slug kuralını uygula
+            //    Farklı sürümler farklı DOM yapıları kullanabilir; olası kapsayıcıları tarıyoruz.
+            const processedOptions = new Set(); // Aynı option'ı birden fazla işlememeye önlem
+            
+            // Daha geniş selector kullanarak option alanlarını yakalayalım
+            $(".sortable-options li, .option-row, .option-item, .fb-option, .field-options .option, .values-wrap .option").each(
+              function () {
+                const $scope = $(this);
+                
+                // Bu option daha önce işlenmişse atla
+                const optionId = $scope.attr('data-index') || $scope.index();
+                const uniqueKey = `${$scope.closest('.fld-label, .editing-mode, .form-field').attr('id') || 'unknown'}-${optionId}`;
+                if (processedOptions.has(uniqueKey)) return;
+                processedOptions.add(uniqueKey);
+
+                // Label & Value inputlarını farklı yöntemlerle bul
+                let $label, $value;
+
+                // 1. Yöntem: Name attribute'larına göre bul
+                const $byNameLabel = $scope.find('input[name*="label"], input[placeholder*="Label"], input[placeholder*="Etiket"]');
+                const $byNameValue = $scope.find('input[name*="value"], input[placeholder*="Value"], input[placeholder*="Değer"]');
+
+                if ($byNameLabel.length && $byNameValue.length) {
+                  $label = $byNameLabel.first();
+                  $value = $byNameValue.first();
+                } else {
+                  // 2. Yöntem: Ardışık text inputlarını bul
+                  const $textInputs = $scope.find('input[type="text"]');
+                  if ($textInputs.length >= 2) {
+                    $label = $($textInputs.get(0));
+                    $value = $($textInputs.get(1));
+                  } else {
+                    return; // Yeterli input yok
+                  }
+                }
+
+                if (!$label || !$value || !$label.length || !$value.length) return;
+
+                // Value inputunu gizle ve label'ın yanına bilgi ekle
+                $value.hide();
+                
+                // Label'ın yanına "(otomatik)" bilgisi ekle
+                if (!$label.next('.auto-value-info').length) {
+                  // $label.after('<small class="auto-value-info text-muted ms-1">(değer otomatik)</small>');
+                }
+
+                // İlk değer boşsa veya label ile eşleşmiyorsa label'dan üret
+                const currentLabel = $label.val().trim();
+                const currentValue = $value.val().trim();
+                const expectedValue = slugify(currentLabel);
+                
+                if (!currentValue || currentValue !== expectedValue) {
+                  $value.val(expectedValue);
+                }
+
+                // Label değişince value'yu otomatik güncelle
+                $label.off("input.autoSlug keyup.autoSlug paste.autoSlug")
+                      .on("input.autoSlug keyup.autoSlug paste.autoSlug", function () {
+                        const newSlug = slugify($(this).val());
+                        $value.val(newSlug);
+                        
+                        // FormBuilder'a değişikliği bildir (eğer events varsa)
+                        $value.trigger('change');
+                      });
+
+                // Value alanına kullanıcı müdahalesini engelle
+                $value.off("input.preventEdit keydown.preventEdit")
+                      .on("input.preventEdit keydown.preventEdit", function (e) {
+                        // Sadece uyarı ver, değeri geri yükle
+                        setTimeout(() => {
+                          const correctValue = slugify($label.val());
+                          if ($(this).val() !== correctValue) {
+                            $(this).val(correctValue);
+                          }
+                        }, 10);
+                      });
+              }
+            );
+          };
+
+          // İlk çalıştırma
+          applyRules();
+
+          // DOM değişirse kuralları tekrar uygula
+          const mo = new MutationObserver(debounce(applyRules, 100));
+          mo.observe(this.root, { childList: true, subtree: true });
+        }
+
+        /**
+         * Şemayı güvenli hâle getirir (render & export için kullanılır).
+         * - access/limit_access gibi güvenlik alanlarını temizler
+         * - options value'larını label'a göre slug'lar
+         * - name yoksa label'dan güvenli bir "name" üretir (stabil form post için)
+         * - className/class alanları korunur (UI'da gizlenmiş ama default değerler ile derlenir)
+         *
+         * @param {Array} schema
+         * @returns {Array} sanitized copy
+         */
+        sanitizeSchema(schema = []) {
+          const clone = JSON.parse(JSON.stringify(schema || []));
+
+          const sanitizeField = (f) => {
+            // Sadece güvenlik ile ilgili alanları kaldır (className/class alanları korunur)
+            delete f.access;
+            delete f["access[]"];
+            delete f.limit_access;
+            
+            // "Diğerini Etkinleştir" özelliğini kaldır
+            delete f.other;
+            delete f.enableOther;
+            
+            // "Geçiş" (Toggle/Switch) özelliğini kaldır
+            delete f.toggle;
+            delete f.switch;
+
+            // name yoksa label'dan üret (stabil backend name)
+            if (!f.name && f.label) {
+              f.name = slugify(String(f.label)).replace(/-/g, "_");
+            }
+
+            // Seçenekleri normalize et (value = slug(label))
+            if (Array.isArray(f.values)) {
+              f.values = f.values.map((opt) => {
+                const safe = { ...opt };
+                const safeLabel = String(safe.label ?? "").trim();
+                const proposed = slugify(safeLabel);
+                if (!safe.value || safe.value !== proposed) {
+                  safe.value = proposed;
+                }
+                return safe;
+              });
+            }
+
+            // Bazı field tipleri nested children taşıyabilir
+            if (Array.isArray(f.columns)) {
+              f.columns.forEach((col) => {
+                if (Array.isArray(col.fields)) {
+                  col.fields = col.fields.map((cf) => sanitizeField(cf));
+                }
+              });
+            }
+            if (Array.isArray(f.subfields)) {
+              f.subfields = f.subfields.map((sf) => sanitizeField(sf));
+            }
+            return f;
+          };
+
+          return clone.map((f) => sanitizeField(f));
+        }
+      }
+
+      /* ============================================================
+         PreviewService
+         - Önizlemeyi ve çıktı textarealarını günceller
+         - UI'de "Gönder" butonu ve submit engelleme
+         - Her zaman sanitize edilmiş şemayı kullanır
+      ============================================================ */
+      class PreviewService {
+        /**
+         * @param {UiPolicyService} uiPolicy - sanitize işlemleri için
+         */
+        constructor(uiPolicy) {
+          this.uiPolicy = uiPolicy;
+        }
+
+        /**
+         * Önizleme ve çıktıları günceller
+         * @param {Object} fbInstance - formBuilder instance
+         */
+        update(fbInstance) {
+          // 1) Raw şemayı çek ve normalize et
+          const raw = fbInstance.actions.getData("json");
+          const { obj } = normalizeSchema(raw);
+
+          // 2) Güvenli/sanitize şema üret
+          const safeObj = this.uiPolicy.sanitizeSchema(obj);
+          const safeStr = JSON.stringify(safeObj, null, 2);
+
+          // 3) Önizleme alanını render et
+          $("#form-preview").html("");
+          $("#form-preview").formRender({
+            dataType: "json",
+            formData: safeStr,
+          });
+
+          // 4) Sabit "Gönder" butonu (tek ve her zaman mevcut)
+          if ($("#form-preview button[type=submit]").length === 0) {
+            $("#form-preview").append(
+              '<button type="submit" class="btn btn-primary mt-3">Gönder</button>'
+            );
+          }
+
+          // 5) Önizleme submit engeli
+          $("#form-preview")
+            .off("submit.preview")
+            .on("submit.preview", function (e) {
+              e.preventDefault();
+              alert("Form başarıyla gönderildi.");
+              return false;
+            });
+
+          // 6) HTML çıktısı üret (geçici div üzerinden, chainable hatasını önler)
+          const tempDiv = $("<div>");
+          tempDiv.formRender({ dataType: "json", formData: safeStr });
+          const innerHtml = tempDiv.html();
+          const fullFormHtml = `
+            <form id="form-extra-questions">
+              ${innerHtml}
+              <button type="submit" class="btn btn-success mt-3">Gönder</button>
+            </form>
+          `;
+
+          // 7) Çıktı textarea'larını güncelle
+          $("#json-output").val(safeStr);
+          $("#html-output").val(fullFormHtml.trim());
+
+          // 8) Debug (isteğe bağlı)
+          console.log("[Preview] JSON", safeObj);
+        }
+      }
+
+      /* ============================================================
+         ButtonsService
+         - Kendi "Temizle" butonumuzu enjekte eder
+         - FormBuilder'ın dahili action butonlarını gizler (yalın UI)
+      ============================================================ */
+      class ButtonsService {
+        /**
+         * @param {Object} params
+         * @param {Object} params.fbInstance
+         * @param {Function} params.onAfterClear - temizle sonrası callback
+         */
+        constructor({ fbInstance, onAfterClear }) {
+          this.fb = fbInstance;
+          this.onAfterClear = onAfterClear;
+          this.injectCustomToolbar();
+          this.hidePluginButtons();
+          this.observeForReHide();
+        }
+
+        injectCustomToolbar() {
+          const html = `
+            <div class="d-flex gap-2">
+              <button id="ys-clear-btn" type="button" class="btn btn-danger btn-sm">Temizle</button>
+            </div>
+          `;
+          $("#ys-toolbar").html(html);
+
+          $("#ys-clear-btn")
+            .off("click")
+            .on("click", () => {
+              if (!confirm("Tüm alanları silmek istediğinize emin misiniz?")) return;
+              try {
+                if (typeof this.fb.actions.clearFields === "function") {
+                  this.fb.actions.clearFields();
+                } else if (typeof this.fb.actions.setData === "function") {
+                  try {
+                    this.fb.actions.setData("[]");
+                  } catch {
+                    this.fb.actions.setData([]);
+                  }
+                }
+              } catch (e) {
+                console.warn("Temizleme sırasında hata:", e);
+              }
+              if (typeof this.onAfterClear === "function") this.onAfterClear();
+            });
+        }
+
+        hidePluginButtons() {
+          // FormBuilder'ın render ettiği butonları gizle (Save, View JSON, Clear vs.)
+          $("#fb-editor, #fb-editor + div, #fb-editor *")
+            .find('button, a, input[type="button"]')
+            .each(function () {
+              const $b = $(this);
+              const txt = ($b.text() || $b.val() || "").trim();
+              if ($b.is("#ys-clear-btn") || /Temizle/i.test(txt)) return; // kendi butonumuz kalsın
+              $b.hide();
+            });
+        }
+
+        observeForReHide() {
+          const mo = new MutationObserver(debounce(() => this.hidePluginButtons(), 80));
+          mo.observe(document.getElementById("fb-editor"), {
+            childList: true,
+            subtree: true,
+          });
+        }
+      }
+
+      /* ============================================================
+         FormBuilderService
+         - formBuilder init & hazır olmasını bekleme
+         - clear/setData override (silme/temizleme algılansın)
+         - DOM mutasyonlarını izleme (ekleme/güncelleme algılansın)
+         - Şema snapshot kıyası (stabil tespit)
+      ============================================================ */
+      class FormBuilderService {
+        /**
+         * @param {Object} params
+         * @param {Object} params.options - formBuilder konfigürasyonu
+         * @param {Function} params.onChange - her değişiklikte tetiklenecek callback
+         * @param {Array} params.initialData - başlangıç form verisi (opsiyonel)
+         */
+        constructor({ options, onChange, initialData = null }) {
+          this.options = options;
+          this.onChange = onChange;
+          this.initialData = initialData;
+          this.instance = null;
+          this.lastSnapshot = [];
+        }
+
+        /**
+         * formBuilder'ı başlatır ve hazır olduktan sonra hook/observer kurar
+         */
+        init() {
+          this.instance = $("#fb-editor").formBuilder(this.options);
+
+          // Hazır olmasını garanti et (formBuilder is still initialising hatasını önler)
+          this.instance.promise.then(() => {
+            this.lastSnapshot = this._snapshot();
+            this._hookActions();
+            this._observeDom();
+            
+            // Başlangıç verisi ayarla (eğer varsa)
+            this._setInitialData();
+            
+            // İlk render
+            this._emitChange();
+          });
+        }
+
+        /**
+         * Başlangıç verisini ayarlar
+         * @private
+         */
+        _setInitialData() {
+          // Eğer başlangıç verisi yoksa hiçbir şey yapma
+          if (!this.initialData || !Array.isArray(this.initialData) || this.initialData.length === 0) {
+            return;
+          }
+
+          try {
+            // FormBuilder'a başlangıç verisini yükle
+            this.instance.actions.setData(JSON.stringify(this.initialData));
+            
+            // Snapshot'ı güncelle (temizleme algılanmasın)
+            setTimeout(() => {
+              this.lastSnapshot = this._snapshot();
+            }, 100);
+            
+            console.log("[FormBuilder] Başlangıç verisi yüklendi:", this.initialData);
+          } catch (e) {
+            console.warn("[FormBuilder] Başlangıç verisi yüklenirken hata:", e);
+          }
+        }
+
+        /**
+         * formBuilder'ın action metodlarını override ederek
+         * setData/clearFields sonrası da değişiklik yayılmasını sağlar
+         */
+        _hookActions() {
+          const fb = this.instance;
+          if (!fb || !fb.actions) return;
+
+          const origSetData = fb.actions.setData;
+          const origClear = fb.actions.clearFields;
+
+          fb.actions.setData = (...args) => {
+            const res = origSetData.apply(fb.actions, args);
+            this._emitChange();
+            return res;
+          };
+
+          fb.actions.clearFields = (...args) => {
+            const res = origClear.apply(fb.actions, args);
+            this._emitChange();
+            return res;
+          };
+
+          // Bazı eylemler buton tıklaması ile olur (option ekleme vb.); tıklamaları da dinle
+          $(document).on(
+            "click.fb_change",
+            "#fb-editor .add, .add-option, .fld-add, .fb-add, .del-button, .remove, .close-field",
+            debounce(() => this._checkAndEmit())
+          );
+        }
+
+        /**
+         * DOM değişikliklerini gözleyerek (özellikle sürükle-bırak eklemeleri) yakalar
+         */
+        _observeDom() {
+          const debounced = debounce(() => this._checkAndEmit(), 80);
+          const mo = new MutationObserver(debounced);
+          mo.observe(document.getElementById("fb-editor"), {
+            childList: true,
+            subtree: true,
+          });
+        }
+
+        /**
+         * Anlık şema snapshot
+         * @returns {Array}
+         */
+        _snapshot() {
+          try {
+            const raw = this.instance.actions.getData("json");
+            return normalizeSchema(raw).obj;
+          } catch {
+            return [];
+          }
+        }
+
+        /**
+         * Değişiklik varsa onChange yayınla
+         */
+        _checkAndEmit() {
+          const cur = this._snapshot();
+          if (!deepEqual(cur, this.lastSnapshot)) {
+            this.lastSnapshot = cur;
+            this._emitChange();
+          }
+        }
+
+        /**
+         * Dış dünyaya değişikliği bildir (preview/çıktılar güncellensin)
+         */
+        _emitChange() {
+          if (typeof this.onChange === "function") {
+            this.onChange(this.instance);
+          }
+        }
+      }
+
+      /* ============================================================
+         Vue App
+         - Sadece state ve yaşam döngüsü
+         - Servisler tüm iş yükünü yapar (SRP)
+      ============================================================ */
+      const app = Vue.createApp({
+        data() {
+          return {
+            i18n: { locale: "tr-TR" },
+            fbService: null,
+            previewService: null,
+            uiPolicyService: null,
+            buttonsService: null,
+            // Başlangıç form verisi - dışarıdan değiştirilebilir
+            defaultFormData: null
+             
+          };
+        },
+        mounted() {
+          // 1) UI politikaları (gelişmiş alanları gizleme + option slug UI)
+          this.uiPolicyService = new UiPolicyService({ root: document.body });
+
+          // 2) Preview servisi (sanitize edilmiş şema ile render)
+          this.previewService = new PreviewService(this.uiPolicyService);
+
+          // 3) FormBuilder servis
+          this.fbService = new FormBuilderService({
+            options: {
+              i18n: this.i18n,
+              disableFields: ["file", "hidden", "button"],
+              showActionButtons: true,
+              stickyControls: { enable: true },
+              scrollToFieldOnAdd: false, // Element eklendikten sonra otomatik scroll'u engelle
+            },
+            onChange: (fbInstance) => this.previewService.update(fbInstance),
+            initialData: this.defaultFormData, // Başlangıç verisi dışarıdan
+          });
+
+          // 4) Başlat ve hazır olunca butonları enjekte et
+          this.fbService.init();
+
+          // formBuilder hazır olduğunda özel araç çubuğunu kur
+          const waitReady = setInterval(() => {
+            if (this.fbService?.instance?.promise) {
+              this.fbService.instance.promise.then(() => {
+                // Kendi "Temizle" butonumuzu bağla ve plugin butonlarını gizle
+                this.buttonsService = new ButtonsService({
+                  fbInstance: this.fbService.instance,
+                  onAfterClear: () => this.previewService.update(this.fbService.instance),
+                });
+              });
+              clearInterval(waitReady);
+            }
+          }, 60);
+        },
+      });
+
+      app.mount("#app");
+    </script>
+  </body>
+</html>
